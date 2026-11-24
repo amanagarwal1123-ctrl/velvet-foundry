@@ -1,0 +1,46 @@
+[
+  {
+    "content": "Backend foundation: db helpers, models, JWT auth utils, object storage module, add EMERGENT_LLM_KEY to .env",
+    "status": "completed"
+  },
+  {
+    "content": "Backend auth & codes: admin email/password login, OTP code login, supervisor code generation/listing/clear, role-based deps",
+    "status": "completed"
+  },
+  {
+    "content": "Backend core domain: karigars, process steps, bags intake (with photos), packets, movements with running balance/loss",
+    "status": "completed"
+  },
+  {
+    "content": "Backend advanced: repack/split/merge/mixed packets, QC + rework, handovers, bag accounting + traceability, recovery allocation",
+    "status": "completed"
+  },
+  {
+    "content": "Backend costing: labour ₹/kg, karigar payments, expenses, cost summaries, delivery/close bag, dashboard, history, demo reset + seed",
+    "status": "completed"
+  },
+  {
+    "content": "Test backend with test_core.py (50/50 passed)",
+    "status": "completed"
+  },
+  {
+    "content": "Frontend foundation: theme tokens + fonts + i18n (Hindi/English), contexts, app shell + top bar",
+    "status": "completed"
+  },
+  {
+    "content": "Frontend auth: login (admin + OTP), supervisor code dashboard panel, protected routes",
+    "status": "completed"
+  },
+  {
+    "content": "Frontend screens: dashboard, bags list/intake/detail, packets + movement timeline, repack/split/merge/QC actions",
+    "status": "completed"
+  },
+  {
+    "content": "Frontend screens: recovery, costing/expenses/payments, deliveries, settings, karigars",
+    "status": "completed"
+  },
+  {
+    "content": "Test frontend end-to-end with testing agent; fix bugs; screenshots; finalize",
+    "status": "in_progress"
+  }
+]
