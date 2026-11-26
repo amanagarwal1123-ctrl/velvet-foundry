@@ -16,7 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 export default function Bags() {
-  const { t, metal, workspace } = useApp();
+  const { t, L, metal, workspace } = useApp();
   const navigate = useNavigate();
   const [bags, setBags] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -47,7 +47,7 @@ export default function Bags() {
 
   return (
     <div className="space-y-6" data-testid="bags-page">
-      <PageHeader titleHi={t('bags')} titleEn="Bags" subtitle={`${t(metal)} · ${t(workspace)}`}
+      <PageHeader title={t('bags')} subtitle={`${t(metal)} · ${t(workspace)}`}
         actions={<Button onClick={() => navigate('/bags/new')} className="h-11" data-testid="new-bag-btn"><Plus className="mr-2 h-4 w-4" />{t('new_bag')}</Button>} />
 
       <Card className="flex flex-wrap items-center gap-3 p-3">
@@ -58,7 +58,7 @@ export default function Bags() {
         <Select value={purity} onValueChange={setPurity}>
           <SelectTrigger className="w-[140px]" data-testid="filter-purity"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">{t('all')} शुद्धता</SelectItem>
+            <SelectItem value="all">{t('all')} {L('शुद्धता', 'Purity')}</SelectItem>
             {purities.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
           </SelectContent>
         </Select>
@@ -73,7 +73,7 @@ export default function Bags() {
       </Card>
 
       {loading ? <CardGridSkeleton /> : bags.length === 0 ? (
-        <EmptyState icon={Package} title="अभी कोई बैग नहीं" subtitle="No bags yet. Open a new bag to issue material."
+        <EmptyState icon={Package} title={L('अभी कोई बैग नहीं', 'No bags yet')} subtitle={L('सामग्री जारी करने के लिए नया बैग खोलें।', 'Open a new bag to issue material.')}
           action={<Button onClick={() => navigate('/bags/new')} data-testid="empty-new-bag"><Plus className="mr-2 h-4 w-4" />{t('new_bag')}</Button>} />
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
@@ -88,8 +88,8 @@ export default function Bags() {
                   <div className="leading-tight"><p className="text-base font-semibold">{b.design_name}</p><p className="text-xs text-muted-foreground">{b.bag_no} · {b.purity}</p></div>
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2">
-                  <div className="rounded-lg bg-muted px-2 py-2 text-center"><p className="text-[11px] text-muted-foreground">जारी / Issued</p><p className="font-num text-sm font-semibold">{fmtG(b.summary?.issued_metal_g)}</p></div>
-                  <div className="rounded-lg bg-muted px-2 py-2 text-center"><p className="text-[11px] text-muted-foreground">नुकसान / Loss</p><p className="font-num text-sm font-semibold text-[hsl(var(--warning))]">{fmtG(b.summary?.outstanding_loss_g)}</p></div>
+                  <div className="rounded-lg bg-muted px-2 py-2 text-center"><p className="text-[11px] text-muted-foreground">{L('जारी', 'Issued')}</p><p className="font-num text-sm font-semibold">{fmtG(b.summary?.issued_metal_g)}</p></div>
+                  <div className="rounded-lg bg-muted px-2 py-2 text-center"><p className="text-[11px] text-muted-foreground">{L('नुकसान', 'Loss')}</p><p className="font-num text-sm font-semibold text-[hsl(var(--warning))]">{fmtG(b.summary?.outstanding_loss_g)}</p></div>
                 </div>
                 <Button onClick={() => navigate(`/bags/${b.id}`)} className="mt-3 h-11 w-full" data-testid="photo-led-card-open-button">{t('open_bag')}</Button>
               </div>

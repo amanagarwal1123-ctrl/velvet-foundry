@@ -1,0 +1,10 @@
+{
+  "short_name": "Yash Factory",
+  "name": "Yash Factory App · यश फैक्टरी ऐप",
+  "description": "Silver & Gold Casting Workshop Manager",
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#1a1030",
+  "background_color": "#17102b",
+  "icons": []
+}

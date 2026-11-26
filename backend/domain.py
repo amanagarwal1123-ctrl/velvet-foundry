@@ -150,21 +150,49 @@ def allocate_recovery(recovered_g: float, eligible: list[dict]) -> tuple[list[di
 
 
 async def compute_bag_costing(bag: dict, labour_rate_per_kg: float) -> dict:
-    """Costing for a bag: labour (₹/kg of finished gross) + tagged expenses."""
+    """Costing for a bag using POSTED (historical) delivery values.
+
+    Reads finished gross and labour from each delivery's stored per-bag
+    allocation so that later rate changes never rewrite past deliveries.
+    """
     workspace = bag["workspace"]
     bag_id = bag["id"]
 
     gross_finished_g = 0.0
     items = 0
-    cursor = db.deliveries.find({"workspace": workspace, "bag_id": bag_id}, {"_id": 0})
-    async for d in cursor:
-        gross_finished_g += float(d.get("gross_weight_g", 0) or 0)
-        items += int(d.get("items_count", 0) or 0)
+    labour_amount = 0.0
+    needs_review = False
 
-    labour_amount = round((gross_finished_g / 1000.0) * float(labour_rate_per_kg or 0), 2)
+    cursor = db.deliveries.find(
+        {"workspace": workspace, "$or": [{"bag_id": bag_id}, {"allocations.bag_id": bag_id}]},
+        {"_id": 0},
+    )
+    async for d in cursor:
+        allocs = d.get("allocations")
+        if allocs:
+            for a in allocs:
+                if a.get("bag_id") == bag_id:
+                    gross_finished_g += float(a.get("gross_weight_g", 0) or 0)
+                    items += int(a.get("items_count", 0) or 0)
+                    labour_amount += float(a.get("labour_amount", 0) or 0)
+        elif d.get("bag_id") == bag_id:
+            # Legacy single-bag delivery — use its posted labour amount.
+            g = float(d.get("gross_weight_g", 0) or 0)
+            gross_finished_g += g
+            items += int(d.get("items_count", 0) or 0)
+            if d.get("labour_amount") is not None:
+                labour_amount += float(d.get("labour_amount", 0) or 0)
+            else:
+                labour_amount += (g / 1000.0) * float(labour_rate_per_kg or 0)
+                needs_review = True
+
+    labour_amount = round(labour_amount, 2)
 
     expenses_total = 0.0
-    cursor = db.expenses.find({"workspace": workspace, "bag_id": bag_id}, {"_id": 0, "amount": 1})
+    cursor = db.expenses.find(
+        {"workspace": workspace, "bag_id": bag_id, "is_deleted": {"$ne": True}},
+        {"_id": 0, "amount": 1},
+    )
     async for e in cursor:
         expenses_total += float(e.get("amount", 0) or 0)
 
@@ -180,4 +208,5 @@ async def compute_bag_costing(bag: dict, labour_rate_per_kg: float) -> dict:
         "total_cost": total_cost,
         "items_delivered": items,
         "cost_per_item": per_item,
+        "needs_review": needs_review,
     }

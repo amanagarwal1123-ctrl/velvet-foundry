@@ -27,65 +27,77 @@ code {
 
 @layer base {
     :root {
-        --background: 214 45% 96%;
-        --foreground: 222 58% 14%;
-        --card: 0 0% 100%;
-        --card-foreground: 222 58% 14%;
-        --popover: 0 0% 100%;
-        --popover-foreground: 222 58% 14%;
-        --primary: 221 55% 44%;
-        --primary-foreground: 0 0% 100%;
-        --secondary: 214 38% 92%;
-        --secondary-foreground: 222 58% 14%;
-        --muted: 220 18% 96%;
-        --muted-foreground: 221 18% 38%;
-        --accent: 214 30% 86%;
-        --accent-foreground: 222 58% 14%;
-        --destructive: 0 72% 52%;
-        --destructive-foreground: 0 0% 100%;
-        --border: 220 14% 90%;
-        --input: 220 14% 90%;
-        --ring: 221 55% 44%;
-        --success: 152 45% 34%;
-        --warning: 38 92% 50%;
-        --danger: 0 72% 52%;
-        --info: 206 70% 44%;
-        --chart-1: 221 55% 44%;
-        --chart-2: 220 8% 62%;
-        --chart-3: 206 70% 44%;
-        --chart-4: 38 92% 50%;
-        --chart-5: 152 45% 34%;
+        /* Light fallback — warm parchment, no pure white */
+        --background: 40 33% 92%;
+        --foreground: 263 45% 15%;
+        --card: 40 42% 96%;
+        --card-foreground: 263 45% 15%;
+        --popover: 40 42% 96%;
+        --popover-foreground: 263 45% 15%;
+        --primary: 275 55% 38%;
+        --primary-foreground: 40 42% 97%;
+        --secondary: 40 30% 86%;
+        --secondary-foreground: 263 45% 15%;
+        --muted: 40 26% 88%;
+        --muted-foreground: 263 20% 38%;
+        --accent: 300 35% 88%;
+        --accent-foreground: 263 45% 15%;
+        --destructive: 350 70% 45%;
+        --destructive-foreground: 40 42% 97%;
+        --border: 40 20% 82%;
+        --input: 40 22% 84%;
+        --ring: 275 55% 38%;
+        --success: 150 55% 32%;
+        --warning: 38 90% 42%;
+        --danger: 350 70% 45%;
+        --info: 262 55% 45%;
+        --jewel-gold: 42 85% 44%;
+        --jewel-emerald: 150 55% 32%;
+        --jewel-ruby: 350 70% 45%;
+        --jewel-magenta: 312 60% 44%;
+        --jewel-sapphire: 220 65% 44%;
+        --chart-1: 275 55% 38%;
+        --chart-2: 42 85% 44%;
+        --chart-3: 150 55% 32%;
+        --chart-4: 350 70% 45%;
+        --chart-5: 312 60% 44%;
         --radius: 0.9rem;
     }
     .dark {
-        --background: 222 58% 10%;
-        --foreground: 214 45% 96%;
-        --card: 222 52% 14%;
-        --card-foreground: 214 45% 96%;
-        --popover: 222 52% 14%;
-        --popover-foreground: 214 45% 96%;
-        --primary: 221 70% 58%;
-        --primary-foreground: 222 58% 10%;
-        --secondary: 221 46% 24%;
-        --secondary-foreground: 214 45% 96%;
-        --muted: 221 46% 24%;
-        --muted-foreground: 214 18% 78%;
-        --accent: 221 44% 32%;
-        --accent-foreground: 214 45% 96%;
-        --destructive: 0 62% 42%;
-        --destructive-foreground: 214 45% 96%;
-        --border: 221 46% 24%;
-        --input: 221 46% 24%;
-        --ring: 221 70% 58%;
-        --success: 152 40% 45%;
-        --warning: 38 92% 55%;
-        --danger: 0 62% 55%;
-        --info: 206 70% 55%;
-        --chart-1: 221 70% 58%;
-        --chart-2: 220 10% 70%;
-        --chart-3: 206 70% 55%;
-        --chart-4: 38 92% 55%;
-        --chart-5: 152 40% 45%;
+        /* Velvet jewel-tone — primary experience, no white */
+        --background: 265 42% 9%;
+        --foreground: 40 40% 92%;
+        --card: 264 38% 14%;
+        --card-foreground: 40 40% 92%;
+        --popover: 264 40% 13%;
+        --popover-foreground: 40 40% 92%;
+        --primary: 43 92% 56%;
+        --primary-foreground: 265 50% 12%;
+        --secondary: 264 30% 22%;
+        --secondary-foreground: 40 40% 92%;
+        --muted: 264 26% 19%;
+        --muted-foreground: 40 18% 74%;
+        --accent: 300 40% 24%;
+        --accent-foreground: 40 40% 94%;
+        --destructive: 350 72% 52%;
+        --destructive-foreground: 40 40% 96%;
+        --border: 264 28% 24%;
+        --input: 264 28% 22%;
+        --ring: 43 92% 56%;
+        --success: 150 55% 46%;
+        --warning: 42 95% 58%;
+        --danger: 350 72% 56%;
+        --info: 312 60% 62%;
+        --jewel-gold: 44 92% 58%;
+        --jewel-emerald: 150 55% 46%;
+        --jewel-ruby: 350 72% 56%;
+        --jewel-magenta: 312 66% 64%;
+        --jewel-sapphire: 215 78% 64%;
+        --chart-1: 43 92% 56%;
+        --chart-2: 150 55% 46%;
+        --chart-3: 312 66% 64%;
+        --chart-4: 350 72% 56%;
+        --chart-5: 215 78% 64%;
         --radius: 0.9rem;
     }
 }
@@ -98,7 +110,7 @@ code {
         @apply bg-background text-foreground;
     }
     ::selection {
-        background: hsl(var(--primary) / 0.22);
+        background: hsl(var(--primary) / 0.28);
     }
 }
 

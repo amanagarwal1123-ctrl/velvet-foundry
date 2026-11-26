@@ -21,6 +21,7 @@ DEFAULT_EXPENSE_CATEGORIES = [
 ]
 
 DEFAULT_LABOUR_RATES = {SILVER: 700.0, GOLD: 2500.0}  # ₹ per kg of finished gross
+DEFAULT_ADJUSTMENT_LIMIT_G = 0.5  # admin-editable approval/highlight limit (grams)
 
 
 async def seed_steps(db, workspace: str) -> None:
@@ -49,6 +50,7 @@ async def seed_settings(db, workspace: str) -> None:
             "id": f"settings:{workspace}",
             "workspace": workspace,
             "labour_rates": dict(DEFAULT_LABOUR_RATES),
+            "adjustment_limit_g": DEFAULT_ADJUSTMENT_LIMIT_G,
             "expense_categories": list(DEFAULT_EXPENSE_CATEGORIES),
             "updated_at": now_iso(),
         }
@@ -64,11 +66,11 @@ async def seed_base(db) -> None:
 async def seed_demo_data(db) -> None:
     """Fresh demo sample so users can explore without touching real data."""
     ws = DEMO
-    # Karigars
+    # Karigars (scoped per metal — Silver and Gold have different workers)
     karigars = [
-        {"id": new_id(), "name": "रमेश / Ramesh", "workspace": ws, "active": True, "created_at": now_iso(), "created_by": None},
-        {"id": new_id(), "name": "सुरेश / Suresh", "workspace": ws, "active": True, "created_at": now_iso(), "created_by": None},
-        {"id": new_id(), "name": "मोहन / Mohan", "workspace": ws, "active": True, "created_at": now_iso(), "created_by": None},
+        {"id": new_id(), "name": "रमेश / Ramesh", "metal": SILVER, "workspace": ws, "active": True, "created_at": now_iso(), "created_by": None},
+        {"id": new_id(), "name": "सुरेश / Suresh", "metal": SILVER, "workspace": ws, "active": True, "created_at": now_iso(), "created_by": None},
+        {"id": new_id(), "name": "मोहन / Mohan", "metal": GOLD, "workspace": ws, "active": True, "created_at": now_iso(), "created_by": None},
     ]
     await db.karigars.insert_many([dict(k) for k in karigars])
 
@@ -111,6 +113,7 @@ async def seed_demo_data(db) -> None:
             "composition": [{"bag_id": bag_id, "metal_g": 492.0}],
             "current_step_id": step_cast,
             "metal_weight_g": 492.0,
+            "pieces": 1,
             "stone_weight_g": 12.0,
             "stone_count": 40,
             "photos": [],
@@ -176,6 +179,7 @@ async def seed_demo_data(db) -> None:
             "composition": [{"bag_id": gbag_id, "metal_g": 80.0}],
             "current_step_id": step0,
             "metal_weight_g": 80.0,
+            "pieces": 1,
             "stone_weight_g": 1.5,
             "stone_count": 5,
             "photos": [],

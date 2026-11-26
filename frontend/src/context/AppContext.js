@@ -13,7 +13,7 @@ export const AppProvider = ({ children }) => {
   const [metal, setMetalState] = useState(localStorage.getItem('fa_metal') || 'silver');
   const [workspace, setWorkspaceState] = useState(localStorage.getItem('fa_workspace') || 'real');
   const [lang, setLangState] = useState(localStorage.getItem('fa_lang') || 'hi');
-  const [theme, setThemeState] = useState(localStorage.getItem('fa_theme') || 'light');
+  const [theme, setThemeState] = useState(localStorage.getItem('fa_theme') || 'dark');
 
   const setMetal = useCallback((m) => { setMetalState(m); localStorage.setItem('fa_metal', m); }, []);
   const setWorkspace = useCallback((w) => { setWorkspaceState(w); localStorage.setItem('fa_workspace', w); }, []);
@@ -70,10 +70,11 @@ export const AppProvider = ({ children }) => {
   }, []);
 
   const t = useMemo(() => translator(lang), [lang]);
+  const L = useCallback((hi, en) => (lang === 'hi' ? hi : en), [lang]);
 
   const value = {
     token, user, ready, metal, setMetal, workspace, setWorkspace,
-    lang, setLang, theme, setTheme, loginAdmin, loginCode, logout, t,
+    lang, setLang, theme, setTheme, loginAdmin, loginCode, logout, t, L,
     isAdmin: user?.role === 'admin',
     isManager: user?.role === 'manager',
     canManage: user?.role === 'admin' || user?.role === 'manager',

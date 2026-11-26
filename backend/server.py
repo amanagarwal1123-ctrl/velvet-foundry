@@ -134,6 +134,13 @@ async def labour_rate_for(workspace: str, metal: str) -> float:
     return float(s.get("labour_rates", {}).get(metal, 0) or 0)
 
 
+async def adjustment_limit_for(workspace: str) -> float:
+    s = await db.settings.find_one({"workspace": workspace}, {"_id": 0})
+    if not s:
+        return 0.5
+    return float(s.get("adjustment_limit_g", 0.5) or 0.0)
+
+
 # ===========================================================================
 # Health
 # ===========================================================================
@@ -214,18 +221,20 @@ class KarigarIn(BaseModel):
 
 
 @api.get("/karigars")
-async def list_karigars(workspace: str = Query(REAL), user: dict = Depends(get_current_user)):
+async def list_karigars(workspace: str = Query(REAL), metal: str = Query(...), user: dict = Depends(get_current_user)):
     val_workspace(workspace)
-    return await db.karigars.find({"workspace": workspace, "active": True}, {"_id": 0}).sort("name", 1).to_list(500)
+    val_metal(metal)
+    return await db.karigars.find({"workspace": workspace, "metal": metal, "active": True}, {"_id": 0}).sort("name", 1).to_list(500)
 
 
 @api.post("/karigars")
-async def create_karigar(body: KarigarIn, workspace: str = Query(REAL), user: dict = Depends(get_current_user)):
+async def create_karigar(body: KarigarIn, workspace: str = Query(REAL), metal: str = Query(...), user: dict = Depends(get_current_user)):
     val_workspace(workspace)
+    val_metal(metal)
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Name required")
-    doc = {"id": new_id(), "workspace": workspace, "name": name, "active": True, "created_at": now_iso(), "created_by": user["id"]}
+    doc = {"id": new_id(), "workspace": workspace, "metal": metal, "name": name, "active": True, "created_at": now_iso(), "created_by": user["id"]}
     await db.karigars.insert_one(doc)
     return clean(doc)
 
@@ -252,6 +261,7 @@ async def delete_karigar(karigar_id: str, user: dict = Depends(get_current_user)
 class SettingsIn(BaseModel):
     labour_rates: Optional[dict] = None
     expense_categories: Optional[List[dict]] = None
+    adjustment_limit_g: Optional[float] = None
 
 
 @api.get("/settings")
@@ -276,6 +286,8 @@ async def update_settings(body: SettingsIn, workspace: str = Query(REAL), user: 
         update["labour_rates"] = clean_rates
     if body.expense_categories is not None:
         update["expense_categories"] = body.expense_categories
+    if body.adjustment_limit_g is not None:
+        update["adjustment_limit_g"] = max(float(body.adjustment_limit_g), 0.0)
     await db.settings.update_one({"workspace": workspace}, {"$set": update}, upsert=True)
     return clean(await db.settings.find_one({"workspace": workspace}))
 
@@ -294,6 +306,7 @@ class BagIn(BaseModel):
     karigar_id: Optional[str] = None
     issue_date: Optional[str] = None
     notes: str = ""
+    client_token: Optional[str] = None
 
 
 class BagEdit(BaseModel):
@@ -352,6 +365,12 @@ async def create_bag(body: BagIn, workspace: str = Query(REAL), user: dict = Dep
     val_metal(body.metal)
     if body.issued_metal_g <= 0:
         raise HTTPException(status_code=400, detail="Issued metal must be greater than 0")
+    # Idempotent retry: if this client submission already created a bag, return it
+    # instead of creating a duplicate (survives an interrupted/re-auth submit).
+    if body.client_token:
+        existing = await db.bags.find_one({"client_token": body.client_token}, {"_id": 0})
+        if existing:
+            return existing
     bag_no = await next_bag_no(workspace, body.metal)
     bag_id = new_id()
     bag = {
@@ -370,6 +389,7 @@ async def create_bag(body: BagIn, workspace: str = Query(REAL), user: dict = Dep
         "issue_date": body.issue_date or now_iso(),
         "status": "open",
         "notes": body.notes or "",
+        "client_token": body.client_token,
         "created_by": user["id"],
         "created_at": now_iso(),
         "history": [history_entry(user, "created", f"Bag {bag_no} opened with {body.issued_metal_g} g")],
@@ -388,6 +408,7 @@ async def create_bag(body: BagIn, workspace: str = Query(REAL), user: dict = Dep
         "metal_weight_g": float(body.issued_metal_g),
         "stone_weight_g": float(body.issued_stones_weight_g or 0),
         "stone_count": float(body.issued_stones_count or 0),
+        "pieces": 0,
         "photos": list(body.photos),
         "karigar_id": body.karigar_id,
         "status": "active",
@@ -551,10 +572,25 @@ async def get_packet(packet_id: str, user: dict = Depends(get_current_user)):
 
 class MoveIn(BaseModel):
     to_step_id: str
-    metal_in_g: float
-    metal_out_g: float
+    receipt_weight_g: float  # scale reading when the packet is received at this step
+    output_weight_g: float   # weight after the process
     karigar_id: Optional[str] = None
     note: str = ""
+
+
+def _apply_move_posting(packet_id: str, pkt: dict, mv: dict, user: dict):
+    """Build the DB update that posts a movement's output onto the packet."""
+    new_comp = scale_composition(pkt["composition"], float(mv["output_weight_g"]))
+    return {
+        "$set": {
+            "current_step_id": mv["to_step_id"],
+            "metal_weight_g": float(mv["output_weight_g"]),
+            "composition": new_comp,
+            "karigar_id": mv.get("karigar_id") or pkt.get("karigar_id"),
+            "qc_status": "none",
+        },
+        "$push": {"history": history_entry(user, "moved", mv.get("_history_detail", "Moved"))},
+    }
 
 
 @api.post("/packets/{packet_id}/move")
@@ -562,14 +598,37 @@ async def move_packet(packet_id: str, body: MoveIn, user: dict = Depends(get_cur
     pkt = await get_packet_or_404(packet_id)
     if pkt["status"] != "active":
         raise HTTPException(status_code=400, detail="Only active packets can be moved")
-    if body.metal_out_g < 0 or body.metal_in_g <= 0:
+    receipt = float(body.receipt_weight_g)
+    output = float(body.output_weight_g)
+    if receipt <= 0 or output < 0:
         raise HTTPException(status_code=400, detail="Invalid weights")
-    if body.metal_out_g > body.metal_in_g:
-        raise HTTPException(status_code=400, detail="Weight out cannot exceed weight in")
+    if output > receipt + 1e-9:
+        raise HTTPException(status_code=400, detail="Output cannot exceed the received weight")
 
-    loss = round(body.metal_in_g - body.metal_out_g, 4)
-    new_comp = scale_composition(pkt["composition"], float(body.metal_out_g))
+    previous = float(pkt["metal_weight_g"])
+    opening_difference = round(receipt - previous, 4)   # receipt adjustment vs last posted
+    process_loss = round(receipt - output, 4)           # loss during the process
+    total_change = round(previous - output, 4)          # net reduction of posted stock
+    limit = await adjustment_limit_for(pkt["workspace"])
+    requires_approval = abs(opening_difference) > 1e-9
+    exceeds_limit = abs(opening_difference) > limit + 1e-9
+    can_approve = user["role"] in (ROLE_ADMIN, ROLE_MANAGER)
+
     step = await db.steps.find_one({"id": body.to_step_id}, {"_id": 0})
+    step_name = step["name_en"] if step else "step"
+
+    approved = False
+    approved_by = approved_by_name = approved_at = None
+    status = "posted"
+    if requires_approval:
+        if can_approve:
+            approved = True
+            approved_by = user["id"]
+            approved_by_name = user["name"]
+            approved_at = now_iso()
+        else:
+            status = "pending_approval"
+
     mv = {
         "id": new_id(),
         "workspace": pkt["workspace"],
@@ -577,36 +636,87 @@ async def move_packet(packet_id: str, body: MoveIn, user: dict = Depends(get_cur
         "packet_id": packet_id,
         "from_step_id": pkt.get("current_step_id"),
         "to_step_id": body.to_step_id,
-        "metal_in_g": float(body.metal_in_g),
-        "metal_out_g": float(body.metal_out_g),
-        "loss_g": loss,
+        "previous_weight_g": previous,
+        "receipt_weight_g": receipt,
+        "output_weight_g": output,
+        "opening_difference_g": opening_difference,
+        "process_loss_g": process_loss,
+        "metal_in_g": receipt,       # kept for backward compatibility
+        "metal_out_g": output,
+        "loss_g": total_change,      # net posted-stock reduction
+        "limit_g": limit,
+        "requires_approval": requires_approval,
+        "exceeds_limit": exceeds_limit,
+        "approved": approved,
+        "approved_by": approved_by,
+        "approved_by_name": approved_by_name,
+        "approved_at": approved_at,
+        "status": status,
         "karigar_id": body.karigar_id or pkt.get("karigar_id"),
         "note": body.note or "",
         "created_by": user["id"],
-        "created_by_name": user["name"],
+        "created_by_name": user["name"],   # the signed-in operator (not the karigar)
         "created_at": now_iso(),
     }
-    await db.movements.insert_one(mv)
-    step_name = step["name_en"] if step else "step"
-    await db.packets.update_one(
-        {"id": packet_id},
-        {
-            "$set": {
-                "current_step_id": body.to_step_id,
-                "metal_weight_g": float(body.metal_out_g),
-                "composition": new_comp,
-                "karigar_id": body.karigar_id or pkt.get("karigar_id"),
-            },
-            "$push": {"history": history_entry(user, "moved", f"To {step_name}, loss {loss} g")},
-        },
-    )
+    await db.movements.insert_one(dict(mv))
+
+    if status == "pending_approval":
+        # Do NOT touch posted stock until a manager approves the adjustment.
+        return {
+            "pending_approval": True,
+            "movement_id": mv["id"],
+            "opening_difference_g": opening_difference,
+            "message": "Weight adjustment recorded — a manager must approve it before stock updates.",
+        }
+
+    detail = f"To {step_name}, process loss {process_loss} g"
+    if requires_approval:
+        detail += f", receipt adj {opening_difference:+} g (approved by {user['name']})"
+    mv["_history_detail"] = detail
+    await db.packets.update_one({"id": packet_id}, _apply_move_posting(packet_id, pkt, mv, user))
     return clean(await db.packets.find_one({"id": packet_id}))
+
+
+@api.post("/movements/{movement_id}/approve")
+async def approve_movement(movement_id: str, user: dict = Depends(require_roles(ROLE_ADMIN, ROLE_MANAGER))):
+    mv = await db.movements.find_one({"id": movement_id, "status": "pending_approval"}, {"_id": 0})
+    if not mv:
+        raise HTTPException(status_code=404, detail="Pending adjustment not found")
+    pkt = await db.packets.find_one({"id": mv["packet_id"]}, {"_id": 0})
+    if not pkt or pkt["status"] != "active":
+        raise HTTPException(status_code=400, detail="Packet is no longer active")
+    await db.movements.update_one(
+        {"id": movement_id},
+        {"$set": {"status": "posted", "approved": True, "approved_by": user["id"], "approved_by_name": user["name"], "approved_at": now_iso()}},
+    )
+    mv["_history_detail"] = f"Adjustment {mv['opening_difference_g']:+} g approved by {user['name']}; process loss {mv['process_loss_g']} g"
+    await db.packets.update_one({"id": pkt["id"]}, _apply_move_posting(pkt["id"], pkt, mv, user))
+    return {"ok": True}
+
+
+@api.post("/movements/{movement_id}/reject")
+async def reject_movement(movement_id: str, user: dict = Depends(require_roles(ROLE_ADMIN, ROLE_MANAGER))):
+    res = await db.movements.update_one(
+        {"id": movement_id, "status": "pending_approval"},
+        {"$set": {"status": "rejected", "approved": False, "approved_by": user["id"], "approved_by_name": user["name"], "approved_at": now_iso()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Pending adjustment not found")
+    return {"ok": True}
+
+
+@api.get("/movements/pending")
+async def pending_movements(workspace: str = Query(REAL), metal: str = Query(...), user: dict = Depends(get_current_user)):
+    val_workspace(workspace)
+    val_metal(metal)
+    return await db.movements.find({"workspace": workspace, "metal": metal, "status": "pending_approval"}, {"_id": 0}).sort("created_at", -1).to_list(200)
 
 
 class RepackIn(BaseModel):
     photos: List[str] = Field(default_factory=list)
     stone_weight_g: Optional[float] = None
     stone_count: Optional[float] = None
+    pieces: Optional[float] = None
     note: str = ""
 
 
@@ -622,6 +732,8 @@ async def repack_packet(packet_id: str, body: RepackIn, user: dict = Depends(get
         update["stone_weight_g"] = float(body.stone_weight_g)
     if body.stone_count is not None:
         update["stone_count"] = float(body.stone_count)
+    if body.pieces is not None:
+        update["pieces"] = float(body.pieces)
     await db.packets.update_one(
         {"id": packet_id},
         {"$set": update, "$push": {"history": history_entry(user, "repacked", body.note or "Repacked with fresh photo")}},
@@ -633,6 +745,7 @@ class SplitChild(BaseModel):
     metal_g: float
     stone_weight_g: float = 0
     stone_count: float = 0
+    pieces: float = 0
     label: str = ""
 
 
@@ -646,45 +759,71 @@ async def split_packet(packet_id: str, body: SplitIn, user: dict = Depends(get_c
     pkt = await get_packet_or_404(packet_id)
     if pkt["status"] != "active":
         raise HTTPException(status_code=400, detail="Only active packets can be split")
-    if len(body.children) < 2:
-        raise HTTPException(status_code=400, detail="Provide at least two child packets")
-    total_child = sum(c.metal_g for c in body.children)
-    parent_metal = float(pkt["metal_weight_g"])
-    if total_child <= 0 or total_child > parent_metal + 0.0001:
-        raise HTTPException(status_code=400, detail="Children metal cannot exceed the packet metal")
+    children = [c for c in body.children if c.metal_g > 0 or c.stone_count > 0 or c.pieces > 0]
+    if len(children) < 1:
+        raise HTTPException(status_code=400, detail="Enter at least one child packet")
 
-    created = []
-    for i, child in enumerate(body.children):
-        comp = scale_composition(pkt["composition"], float(child.metal_g))
-        child_doc = {
+    p_m = float(pkt["metal_weight_g"])
+    p_sw = float(pkt.get("stone_weight_g", 0) or 0)
+    p_sc = float(pkt.get("stone_count", 0) or 0)
+    p_p = float(pkt.get("pieces", 0) or 0)
+
+    s_m = round(sum(c.metal_g for c in children), 4)
+    s_sw = round(sum(c.stone_weight_g for c in children), 4)
+    s_sc = sum(c.stone_count for c in children)
+    s_p = sum(c.pieces for c in children)
+
+    rem_m = round(p_m - s_m, 4)
+    rem_sw = round(p_sw - s_sw, 4)
+    rem_sc = p_sc - s_sc
+    rem_p = p_p - s_p
+    if rem_m < -1e-6 or rem_sw < -1e-6 or rem_sc < -1e-6 or rem_p < -1e-6:
+        raise HTTPException(status_code=400, detail="Children exceed the packet's metal, stones or pieces")
+
+    def make_child(label, metal_g, stone_w, stone_c, pieces, suffix):
+        return {
             "id": new_id(),
-            "packet_no": f"{pkt['packet_no']}.{chr(97 + i)}",
+            "packet_no": f"{pkt['packet_no']}.{suffix}",
             "workspace": pkt["workspace"],
             "metal": pkt["metal"],
             "bag_ids": list(pkt["bag_ids"]),
-            "composition": comp,
+            "composition": scale_composition(pkt["composition"], float(metal_g)),
             "current_step_id": pkt.get("current_step_id"),
-            "metal_weight_g": float(child.metal_g),
-            "stone_weight_g": float(child.stone_weight_g or 0),
-            "stone_count": float(child.stone_count or 0),
+            "metal_weight_g": round(float(metal_g), 4),
+            "stone_weight_g": round(float(stone_w), 4),
+            "stone_count": float(stone_c),
+            "pieces": float(pieces),
             "photos": [],
             "karigar_id": pkt.get("karigar_id"),
             "status": "active",
             "parent_ids": [packet_id],
             "qc_status": "none",
-            "label": child.label,
+            "label": label,
+            "is_mixed": len(pkt["composition"]) > 1,
             "created_by": user["id"],
             "created_at": now_iso(),
             "history": [history_entry(user, "created", f"Split from {pkt['packet_no']}")],
         }
-        await db.packets.insert_one(dict(child_doc))
-        created.append(clean(child_doc))
+
+    created = []
+    for i, child in enumerate(children):
+        doc = make_child(child.label, child.metal_g, child.stone_weight_g, child.stone_count, child.pieces, chr(97 + i))
+        await db.packets.insert_one(dict(doc))
+        created.append(clean(doc))
+
+    # Preserve any physical remainder as a live packet — never silent loss.
+    remainder = None
+    if rem_m > 1e-6 or rem_sw > 1e-6 or rem_sc > 1e-6 or rem_p > 1e-6:
+        remainder = make_child("Remainder / बचा", rem_m, rem_sw, rem_sc, rem_p, f"{chr(97 + len(children))}")
+        remainder["history"] = [history_entry(user, "created", f"Retained remainder from {pkt['packet_no']}")]
+        await db.packets.insert_one(dict(remainder))
+        remainder = clean(remainder)
 
     await db.packets.update_one(
         {"id": packet_id},
-        {"$set": {"status": "split"}, "$push": {"history": history_entry(user, "split", f"Into {len(created)} packets")}},
+        {"$set": {"status": "split"}, "$push": {"history": history_entry(user, "split", f"Into {len(created)} packets" + (" + remainder" if remainder else ""))}},
     )
-    return {"parent_id": packet_id, "children": created}
+    return {"parent_id": packet_id, "children": created, "remainder": remainder}
 
 
 class MergeIn(BaseModel):
@@ -713,11 +852,13 @@ async def merge_packets(body: MergeIn, workspace: str = Query(REAL), metal: str 
     metal_total = 0.0
     stone_w = 0.0
     stone_c = 0.0
+    pieces_total = 0.0
     bag_ids: set[str] = set()
     for p in parents:
         metal_total += float(p["metal_weight_g"])
         stone_w += float(p.get("stone_weight_g", 0) or 0)
         stone_c += float(p.get("stone_count", 0) or 0)
+        pieces_total += float(p.get("pieces", 0) or 0)
         for c in p["composition"]:
             comp_map[c["bag_id"]] = round(comp_map.get(c["bag_id"], 0) + float(c["metal_g"]), 4)
         bag_ids.update(p["bag_ids"])
@@ -736,6 +877,7 @@ async def merge_packets(body: MergeIn, workspace: str = Query(REAL), metal: str 
         "metal_weight_g": round(metal_total, 4),
         "stone_weight_g": round(stone_w, 4),
         "stone_count": stone_c,
+        "pieces": pieces_total,
         "photos": [],
         "karigar_id": body.karigar_id or parents[0].get("karigar_id"),
         "status": "active",
@@ -929,46 +1071,59 @@ async def delete_expense(expense_id: str, user: dict = Depends(get_current_user)
 # ===========================================================================
 class PaymentIn(BaseModel):
     karigar_id: str
-    mode: str  # salary | per_piece | per_weight
-    rate: float = 0
-    quantity: float = 0
-    weight_g: float = 0
-    amount: Optional[float] = None
     period: str = ""
     note: str = ""
+    salary_amount: float = 0
+    commission_type: Optional[str] = None  # per_stone | per_piece | per_tree
+    commission_count: float = 0
+    commission_rate: float = 0
+
+
+COMMISSION_UNITS = {"per_stone": "stone set", "per_piece": "piece buffed", "per_tree": "tree cast"}
 
 
 @api.get("/payments")
-async def list_payments(workspace: str = Query(REAL), karigar_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+async def list_payments(workspace: str = Query(REAL), metal: str = Query(...), karigar_id: Optional[str] = None, user: dict = Depends(get_current_user)):
     val_workspace(workspace)
-    q: dict = {"workspace": workspace, "is_deleted": {"$ne": True}}
+    val_metal(metal)
+    q: dict = {"workspace": workspace, "metal": metal, "is_deleted": {"$ne": True}}
     if karigar_id:
         q["karigar_id"] = karigar_id
     return await db.payments.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
 
 
 @api.post("/payments")
-async def create_payment(body: PaymentIn, workspace: str = Query(REAL), user: dict = Depends(get_current_user)):
+async def create_payment(body: PaymentIn, workspace: str = Query(REAL), metal: str = Query(...), user: dict = Depends(get_current_user)):
     val_workspace(workspace)
-    if body.mode not in ("salary", "per_piece", "per_weight"):
-        raise HTTPException(status_code=400, detail="Invalid payment mode")
-    if body.mode == "salary":
-        amount = float(body.amount if body.amount is not None else 0)
-    elif body.mode == "per_piece":
-        amount = float(body.rate) * float(body.quantity)
-    else:  # per_weight — rate is ₹ per gram
-        amount = float(body.rate) * float(body.weight_g)
-    if amount <= 0:
-        raise HTTPException(status_code=400, detail="Payment amount must be greater than 0")
+    val_metal(metal)
+    # Verify the karigar belongs to this metal context.
+    kar = await db.karigars.find_one({"id": body.karigar_id, "workspace": workspace, "metal": metal})
+    if not kar:
+        raise HTTPException(status_code=400, detail="Karigar not found in this metal context")
+
+    salary = round(float(body.salary_amount or 0), 2)
+    commission_amount = 0.0
+    commission_type = None
+    if body.commission_type in COMMISSION_UNITS:
+        commission_type = body.commission_type
+        commission_amount = round(float(body.commission_count or 0) * float(body.commission_rate or 0), 2)
+    total = round(salary + commission_amount, 2)
+    if total <= 0:
+        raise HTTPException(status_code=400, detail="Enter a salary and/or a commission amount")
+
     doc = {
         "id": new_id(),
         "workspace": workspace,
+        "metal": metal,
         "karigar_id": body.karigar_id,
-        "mode": body.mode,
-        "rate": float(body.rate or 0),
-        "quantity": float(body.quantity or 0),
-        "weight_g": float(body.weight_g or 0),
-        "amount": round(amount, 2),
+        "salary_amount": salary,
+        "commission_type": commission_type,
+        "commission_unit": COMMISSION_UNITS.get(commission_type) if commission_type else None,
+        "commission_count": float(body.commission_count or 0) if commission_type else 0,
+        "commission_rate": float(body.commission_rate or 0) if commission_type else 0,
+        "commission_amount": commission_amount,
+        "amount": total,
+        "mode": "salary_commission",
         "period": body.period or "",
         "note": body.note or "",
         "is_deleted": False,
@@ -992,12 +1147,25 @@ async def delete_payment(payment_id: str, user: dict = Depends(get_current_user)
 # Deliveries (hand finished items to the showroom; closes the bag)
 # ===========================================================================
 class DeliveryIn(BaseModel):
-    bag_id: str
     packet_ids: List[str] = Field(default_factory=list)
     items_count: int = 0
-    gross_weight_g: float = 0
+    gross_weight_g: float = 0  # total finished gross incl. stones
     showroom: str = ""
     note: str = ""
+    bag_id: Optional[str] = None  # optional hint, not required
+
+
+async def refresh_bag_status(bag_id: str, user: dict) -> None:
+    """A bag stays open while ANY of its goods are still in production/rework."""
+    active = await db.packets.count_documents({"composition.bag_id": bag_id, "status": "active"})
+    delivered = await db.packets.count_documents({"composition.bag_id": bag_id, "status": "delivered"})
+    new_status = "open" if active > 0 or delivered == 0 else "delivered"
+    bag = await db.bags.find_one({"id": bag_id}, {"_id": 0, "status": 1})
+    if bag and bag.get("status") != new_status:
+        await db.bags.update_one(
+            {"id": bag_id},
+            {"$set": {"status": new_status}, "$push": {"history": history_entry(user, "status", f"Bag is now {new_status}")}},
+        )
 
 
 @api.get("/deliveries")
@@ -1007,41 +1175,100 @@ async def list_deliveries(workspace: str = Query(REAL), metal: str = Query(...),
     return await db.deliveries.find({"workspace": workspace, "metal": metal}, {"_id": 0}).sort("created_at", -1).to_list(500)
 
 
+@api.get("/deliveries/eligible")
+async def eligible_packets(workspace: str = Query(REAL), metal: str = Query(...), bag_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+    """Only active, QC-passed packets may be dispatched."""
+    val_workspace(workspace)
+    val_metal(metal)
+    q = {"workspace": workspace, "metal": metal, "status": "active", "qc_status": "pass"}
+    if bag_id:
+        q["composition.bag_id"] = bag_id
+    return await db.packets.find(q, {"_id": 0}).sort("created_at", 1).to_list(500)
+
+
 @api.post("/deliveries")
 async def create_delivery(body: DeliveryIn, workspace: str = Query(REAL), metal: str = Query(...), user: dict = Depends(get_current_user)):
     val_workspace(workspace)
     val_metal(metal)
-    bag = await get_bag_or_404(body.bag_id)
+    if not body.packet_ids:
+        raise HTTPException(status_code=400, detail="Select at least one packet to dispatch")
+    packets = await db.packets.find({"id": {"$in": body.packet_ids}}, {"_id": 0}).to_list(200)
+    if len(packets) != len(body.packet_ids):
+        raise HTTPException(status_code=404, detail="Some packets not found")
+    # Enforce eligibility: only active, QC-passed packets may ship.
+    for p in packets:
+        if p["status"] != "active":
+            raise HTTPException(status_code=400, detail=f"Packet {p['packet_no']} is not active")
+        if p.get("qc_status") != "pass":
+            raise HTTPException(status_code=400, detail=f"Packet {p['packet_no']} has not passed final QC")
+
     rate = await labour_rate_for(workspace, metal)
-    labour_amount = round((float(body.gross_weight_g) / 1000.0) * rate, 2)
+    gross_total = float(body.gross_weight_g or 0)
+    items_total = int(body.items_count or 0)
+
+    # Combine the selected packets' composition per source bag.
+    bag_metal: dict[str, float] = {}
+    for p in packets:
+        for c in p.get("composition", []):
+            bag_metal[c["bag_id"]] = round(bag_metal.get(c["bag_id"], 0) + float(c["metal_g"]), 4)
+    total_metal = sum(bag_metal.values()) or 1.0
+
+    bag_ids = list(bag_metal.keys())
+    bags = await db.bags.find({"id": {"$in": bag_ids}}, {"_id": 0, "id": 1, "bag_no": 1, "design_name": 1}).to_list(200)
+    bag_map = {b["id"]: b for b in bags}
+
+    # Allocate finished gross, labour and items across the source bags by metal share.
+    allocations = []
+    assigned_items = 0
+    for i, bid in enumerate(bag_ids):
+        share = bag_metal[bid] / total_metal
+        gross_alloc = round(gross_total * share, 4)
+        labour_alloc = round((gross_alloc / 1000.0) * rate, 2)
+        if i == len(bag_ids) - 1:
+            items_alloc = items_total - assigned_items
+        else:
+            items_alloc = int(round(items_total * share))
+            assigned_items += items_alloc
+        allocations.append({
+            "bag_id": bid,
+            "bag_no": bag_map.get(bid, {}).get("bag_no"),
+            "design_name": bag_map.get(bid, {}).get("design_name"),
+            "metal_g": bag_metal[bid],
+            "gross_weight_g": gross_alloc,
+            "labour_amount": labour_alloc,
+            "items_count": max(items_alloc, 0),
+        })
+
     doc = {
         "id": new_id(),
         "workspace": workspace,
         "metal": metal,
-        "bag_id": body.bag_id,
-        "bag_no": bag.get("bag_no"),
-        "design_name": bag.get("design_name"),
+        "bag_id": bag_ids[0] if len(bag_ids) == 1 else None,
+        "bag_no": bag_map.get(bag_ids[0], {}).get("bag_no") if len(bag_ids) == 1 else "Mixed",
+        "design_name": bag_map.get(bag_ids[0], {}).get("design_name") if len(bag_ids) == 1 else None,
+        "is_mixed": len(bag_ids) > 1,
         "packet_ids": body.packet_ids,
-        "items_count": int(body.items_count or 0),
-        "gross_weight_g": float(body.gross_weight_g or 0),
+        "items_count": items_total,
+        "gross_weight_g": gross_total,
         "labour_rate_per_kg": rate,
-        "labour_amount": labour_amount,
+        "labour_amount": round(sum(a["labour_amount"] for a in allocations), 2),
+        "allocations": allocations,
         "showroom": body.showroom or "",
         "note": body.note or "",
         "created_by": user["id"],
         "created_by_name": user["name"],
         "created_at": now_iso(),
     }
-    await db.deliveries.insert_one(doc)
+    await db.deliveries.insert_one(dict(doc))
+
     for pid in body.packet_ids:
         await db.packets.update_one(
             {"id": pid},
-            {"$set": {"status": "delivered"}, "$push": {"history": history_entry(user, "delivered", "Delivered to showroom")}},
+            {"$set": {"status": "delivered"}, "$push": {"history": history_entry(user, "delivered", f"Dispatched to {body.showroom or 'showroom'}")}},
         )
-    await db.bags.update_one(
-        {"id": body.bag_id},
-        {"$set": {"status": "delivered"}, "$push": {"history": history_entry(user, "delivered", f"{body.items_count} items to {body.showroom}")}},
-    )
+    # Only close bags whose goods are fully shipped; others remain open.
+    for bid in bag_ids:
+        await refresh_bag_status(bid, user)
     return clean(doc)
 
 
@@ -1079,19 +1306,33 @@ async def costing_summary(workspace: str = Query(REAL), metal: str = Query(...),
         pd["total_cost"] = round(pd["total_cost"] + c["total_cost"], 2)
         pd["items_delivered"] += c["items_delivered"]
 
+    # Factory-level expense totals: ALL non-void expenses counted once, with the
+    # unallocated (no-bag) portion shown explicitly. Voided rows are excluded.
+    total_expenses_all = 0.0
+    unallocated_expenses = 0.0
+    async for e in db.expenses.find({"workspace": workspace, "metal": metal, "is_deleted": {"$ne": True}}, {"_id": 0, "amount": 1, "bag_id": 1}):
+        amt = float(e.get("amount", 0) or 0)
+        total_expenses_all += amt
+        if not e.get("bag_id"):
+            unallocated_expenses += amt
+
+    # Karigar payroll scoped to this metal (Silver and Gold keep separate workers).
     total_payments = 0.0
-    async for p in db.payments.find({"workspace": workspace, "is_deleted": {"$ne": True}}, {"_id": 0, "amount": 1}):
+    async for p in db.payments.find({"workspace": workspace, "metal": metal, "is_deleted": {"$ne": True}}, {"_id": 0, "amount": 1}):
         total_payments += float(p.get("amount", 0) or 0)
 
     return {
         "labour_rate_per_kg": rate,
         "per_bag": per_bag,
         "per_design": list(per_design.values()),
+        "unallocated_expenses": round(unallocated_expenses, 2),
         "totals": {
             "labour_amount": round(total_labour, 2),
-            "expenses_total": round(total_expenses, 2),
+            "expenses_total": round(total_expenses_all, 2),
+            "expenses_on_bags": round(total_expenses, 2),
+            "unallocated_expenses": round(unallocated_expenses, 2),
             "karigar_payments": round(total_payments, 2),
-            "grand_total": round(total_labour + total_expenses + total_payments, 2),
+            "grand_total": round(total_labour + total_expenses_all + total_payments, 2),
         },
     }
 
@@ -1115,8 +1356,9 @@ async def dashboard(workspace: str = Query(REAL), metal: str = Query(...), user:
     today = now_iso()[:10]
     delivered_today = await db.deliveries.count_documents({**base, "created_at": {"$regex": f"^{today}"}})
 
-    recent_moves = await db.movements.find(base, {"_id": 0}).sort("created_at", -1).to_list(8)
+    recent_moves = await db.movements.find({**base, "status": {"$ne": "rejected"}}, {"_id": 0}).sort("created_at", -1).to_list(8)
     recent_bags = await db.bags.find(base, {"_id": 0}).sort("created_at", -1).to_list(6)
+    pending_approvals = await db.movements.count_documents({**base, "status": "pending_approval"})
 
     eligible = await eligible_bags_for_recovery(workspace, metal)
     recovery_pending_g = round(sum(b["outstanding_loss_g"] for b in eligible), 4)
@@ -1128,6 +1370,7 @@ async def dashboard(workspace: str = Query(REAL), metal: str = Query(...), user:
             "rework": rework,
             "delivered_today": delivered_today,
             "delivered_bags": delivered_bags,
+            "pending_approvals": pending_approvals,
         },
         "recovery_pending_g": recovery_pending_g,
         "recovery_pending_bags": len(eligible),

@@ -16,7 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from '@/components/ui/dialog';
 
 export default function Recovery() {
-  const { t, metal, workspace } = useApp();
+  const { t, L, metal, workspace } = useApp();
   const [eligible, setEligible] = useState([]);
   const [total, setTotal] = useState(0);
   const [history, setHistory] = useState([]);
@@ -39,7 +39,7 @@ export default function Recovery() {
 
   return (
     <div className="space-y-6" data-testid="recovery-page">
-      <PageHeader titleHi={t('recovery')} titleEn="Recovery" subtitle={`${t(metal)} · ${t(workspace)}`}
+      <PageHeader title={t('recovery')} subtitle={`${t(metal)} · ${t(workspace)}`}
         actions={<RecoveryDialog onDone={load} disabled={total <= 0} />} />
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -48,12 +48,12 @@ export default function Recovery() {
       </div>
 
       <Card className="p-4">
-        <p className="mb-3 font-semibold">बकाया नुकसान वाले बैग / Bags with outstanding loss</p>
+        <p className="mb-3 font-semibold">{L('बकाया नुकसान वाले बैग', 'Bags with outstanding loss')}</p>
         {loading ? <Loader2 className="mx-auto my-6 h-6 w-6 animate-spin text-primary" /> : eligible.length === 0 ? (
-          <EmptyState icon={Recycle} title="कोई बकाया नहीं" subtitle="No bags currently have outstanding loss." />
+          <EmptyState icon={Recycle} title={L('कोई बकाया नहीं', 'No outstanding loss')} subtitle={L('अभी किसी बैग में बकाया नुकसान नहीं है।', 'No bags currently have outstanding loss.')} />
         ) : (
           <Table>
-            <TableHeader><TableRow><TableHead>Bag</TableHead><TableHead>Design</TableHead><TableHead>Purity</TableHead><TableHead className="text-right">Outstanding</TableHead></TableRow></TableHeader>
+            <TableHeader><TableRow><TableHead>{L('बैग', 'Bag')}</TableHead><TableHead>{L('डिज़ाइन', 'Design')}</TableHead><TableHead>{L('शुद्धता', 'Purity')}</TableHead><TableHead className="text-right">{L('बकाया', 'Outstanding')}</TableHead></TableRow></TableHeader>
             <TableBody>
               {eligible.map((b) => (
                 <TableRow key={b.bag_id} data-testid={`eligible-${b.bag_no}`}>
@@ -69,7 +69,7 @@ export default function Recovery() {
       </Card>
 
       <Card className="p-4">
-        <p className="mb-3 font-semibold">पिछली रिकवरी / Past Recoveries</p>
+        <p className="mb-3 font-semibold">{L('पिछली रिकवरी', 'Past Recoveries')}</p>
         {history.length === 0 ? <p className="text-sm text-muted-foreground">{t('no_data')}</p> : (
           <ul className="space-y-3">
             {history.map((r) => (
@@ -80,7 +80,7 @@ export default function Recovery() {
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2 text-xs">
                   {r.allocations.map((a) => <span key={a.bag_id} className="rounded-full bg-accent px-2 py-1">{a.bag_no}: {fmtG(a.amount_g)}</span>)}
-                  {r.unallocated_g > 0 ? <span className="rounded-full bg-muted px-2 py-1">Unallocated: {fmtG(r.unallocated_g)}</span> : null}
+                  {r.unallocated_g > 0 ? <span className="rounded-full bg-muted px-2 py-1">{L('बिना आवंटित', 'Unallocated')}: {fmtG(r.unallocated_g)}</span> : null}
                 </div>
               </li>
             ))}
@@ -92,7 +92,7 @@ export default function Recovery() {
 }
 
 function RecoveryDialog({ onDone, disabled }) {
-  const { t, metal, workspace } = useApp();
+  const { t, L, metal, workspace } = useApp();
   const [open, setOpen] = useState(false);
   const [recovered, setRecovered] = useState('');
   const [source, setSource] = useState('');
@@ -102,7 +102,7 @@ function RecoveryDialog({ onDone, disabled }) {
     setBusy(true);
     try {
       const { data } = await api.post('/recovery', { recovered_g: Number(recovered), source }, { params: { workspace, metal } });
-      toast.success(`आवंटित / Allocated to ${data.allocations.length} bags`);
+      toast.success(L(`${data.allocations.length} बैग में आवंटित`, `Allocated to ${data.allocations.length} bags`));
       setOpen(false); setRecovered(''); setSource(''); onDone();
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
@@ -112,9 +112,9 @@ function RecoveryDialog({ onDone, disabled }) {
       <DialogContent>
         <DialogHeader><DialogTitle>{t('record_recovery')}</DialogTitle></DialogHeader>
         <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">Recovered metal is shared across eligible bags in proportion to their outstanding loss.</p>
+          <p className="text-sm text-muted-foreground">{L('रिकवर हुई धातु हर पात्र बैग में उनके बकाया नुकसान के अनुपात में बाँटी जाती है।', 'Recovered metal is shared across eligible bags in proportion to their outstanding loss.')}</p>
           <div className="space-y-2"><Label><BilingualLabel k="recovered" en="Recovered metal (g)" /></Label><Input type="number" step="any" value={recovered} onChange={(e) => setRecovered(e.target.value)} className="h-11" data-testid="recovery-weight" /></div>
-          <div className="space-y-2"><Label><BilingualLabel k="source" /></Label><Input value={source} onChange={(e) => setSource(e.target.value)} className="h-11" placeholder="Common casting dust" data-testid="recovery-source" /></div>
+          <div className="space-y-2"><Label><BilingualLabel k="source" /></Label><Input value={source} onChange={(e) => setSource(e.target.value)} className="h-11" placeholder={L('जैसे साझा कास्टिंग धूल', 'e.g. Common casting dust')} data-testid="recovery-source" /></div>
         </div>
         <DialogFooter><Button onClick={save} disabled={busy} data-testid="recovery-save">{busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}{t('confirm')}</Button></DialogFooter>
       </DialogContent>

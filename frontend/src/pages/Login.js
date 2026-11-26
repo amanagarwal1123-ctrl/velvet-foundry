@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp';
 
 export default function Login() {
-  const { loginAdmin, loginCode, t, token } = useApp();
+  const { loginAdmin, loginCode, t, L, token } = useApp();
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -26,7 +26,7 @@ export default function Login() {
     setBusy(true);
     try {
       await loginAdmin(email.trim().toLowerCase(), password);
-      toast.success('स्वागत है / Welcome');
+      toast.success(L('स्वागत है', 'Welcome'));
       navigate('/');
     } catch (err) {
       toast.error(apiError(err, 'Login failed'));
@@ -41,7 +41,7 @@ export default function Login() {
     setBusy(true);
     try {
       await loginCode(code);
-      toast.success('स्वागत है / Welcome');
+      toast.success(L('स्वागत है', 'Welcome'));
       navigate('/');
     } catch (err) {
       toast.error(apiError(err, 'Invalid code'));
@@ -54,7 +54,7 @@ export default function Login() {
   return (
     <div className="grid min-h-screen lg:grid-cols-2">
       {/* Brand panel */}
-      <div className="relative hidden flex-col justify-between bg-gradient-to-b from-[hsl(222_58%_14%)] via-[hsl(221_46%_24%)] to-[hsl(221_55%_44%)] p-12 text-white lg:flex">
+      <div className="relative hidden flex-col justify-between bg-gradient-to-br from-[hsl(265_45%_12%)] via-[hsl(300_40%_22%)] to-[hsl(43_80%_34%)] p-12 text-white lg:flex">
         <div className="flex items-center gap-3">
           <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/15"><Gem className="h-6 w-6" /></span>
           <div>
@@ -63,8 +63,8 @@ export default function Login() {
           </div>
         </div>
         <div>
-          <h1 className="text-4xl font-semibold leading-tight">चांदी और सोने का<br/>पूरा हिसाब</h1>
-          <p className="mt-4 max-w-md text-white/80">Every bag, packet, weight, loss and recovery — tracked with photos from issue to showroom delivery.</p>
+          <h1 className="text-4xl font-semibold leading-tight">{L('चांदी और सोने का', 'Complete silver & gold')}<br/>{L('पूरा हिसाब', 'casting accounts')}</h1>
+          <p className="mt-4 max-w-md text-white/80">{L('हर बैग, पैकेट, वज़न, नुकसान और रिकवरी — जारी से शोरूम डिलीवरी तक फोटो के साथ ट्रैक।', 'Every bag, packet, weight, loss and recovery — tracked with photos from issue to showroom delivery.')}</p>
         </div>
         <p className="text-sm text-white/60">© {new Date().getFullYear()} {t('app_name')}</p>
       </div>
@@ -85,7 +85,7 @@ export default function Login() {
             <TabsContent value="staff">
               <form onSubmit={doCode} className="mt-6 space-y-5">
                 <div className="leading-tight">
-                  <p className="text-sm font-medium">सुपरवाइज़र का कोड</p>
+                  <p className="text-sm font-medium">{L('सुपरवाइज़र का कोड', "Supervisor's code")}</p>
                   <p className="text-xs text-muted-foreground">{t('code_login_hint')}</p>
                 </div>
                 <div className="flex justify-center">
@@ -104,11 +104,11 @@ export default function Login() {
             <TabsContent value="admin">
               <form onSubmit={doAdmin} className="mt-6 space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="email"><span className="text-sm font-medium">ईमेल / Email</span></Label>
+                  <Label htmlFor="email"><span className="text-sm font-medium">{L('ईमेल', 'Email')}</span></Label>
                   <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="admin@gmail.com" className="h-12" required data-testid="admin-email" />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="password"><span className="text-sm font-medium">पासवर्ड / Password</span></Label>
+                  <Label htmlFor="password"><span className="text-sm font-medium">{L('पासवर्ड', 'Password')}</span></Label>
                   <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="h-12" required data-testid="admin-password" />
                 </div>
                 <Button type="submit" className="h-12 w-full text-base" disabled={busy} data-testid="admin-submit-button">

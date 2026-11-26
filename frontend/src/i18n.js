@@ -1,7 +1,7 @@
 // Single-language UI strings (chrome, buttons, nav). Toggled by language switch.
 export const STRINGS = {
   en: {
-    app_name: 'Factory App',
+    app_name: 'Yash Factory App',
     app_tagline: 'Silver & Gold Casting Workshop',
     dashboard: 'Dashboard', bags: 'Bags', packets: 'Packets', recovery: 'Recovery',
     costing: 'Costing', deliveries: 'Deliveries', karigars: 'Karigars', settings: 'Settings',
@@ -20,7 +20,7 @@ export const STRINGS = {
     demo_reset: 'Reset Demo Data', per_bag: 'Per Bag', per_design: 'Per Design',
   },
   hi: {
-    app_name: 'फैक्टरी ऐप',
+    app_name: 'Yash Factory App',
     app_tagline: 'चांदी और सोने की कास्टिंग वर्कशॉप',
     dashboard: 'डैशबोर्ड', bags: 'बैग', packets: 'पैकेट',
     recovery: 'रिकवरी', costing: 'लागत', deliveries: 'डिलीवरी',

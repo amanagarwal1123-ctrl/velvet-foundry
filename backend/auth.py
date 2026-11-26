@@ -2,12 +2,14 @@
 import os
 import random
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
 from pydantic import BaseModel
+from pymongo import ReturnDocument
 
 from db import clean, db, new_id, now_iso
 
@@ -142,8 +144,9 @@ class CodeLogin(BaseModel):
 
 
 class CreateCode(BaseModel):
-    name: str
+    name: Optional[str] = None
     role: str
+    staff_id: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -160,16 +163,17 @@ async def admin_login(body: AdminLogin):
 
 @router.post("/code-login")
 async def code_login(body: CodeLogin):
-    code_doc = await db.access_codes.find_one({"code": body.code.strip(), "used": False})
+    # Atomic single-use redemption: claim the code and user together.
+    code_doc = await db.access_codes.find_one_and_update(
+        {"code": body.code.strip(), "used": False},
+        {"$set": {"used": True, "used_at": now_iso()}},
+        return_document=ReturnDocument.AFTER,
+    )
     if not code_doc:
         raise HTTPException(status_code=401, detail="Invalid or already-used code")
     user = await db.users.find_one({"id": code_doc["user_id"]})
     if not user:
         raise HTTPException(status_code=401, detail="Linked user missing")
-    await db.access_codes.update_one(
-        {"id": code_doc["id"]},
-        {"$set": {"used": True, "used_at": now_iso()}},
-    )
     user = clean(user)
     return {"token": make_token(user), "user": public_user(user)}
 
@@ -194,15 +198,20 @@ async def create_code(body: CreateCode, user: dict = Depends(get_current_user)):
     allowed = ISSUABLE.get(user["role"], [])
     if target_role not in allowed:
         raise HTTPException(status_code=403, detail="You cannot issue a code for this role")
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Name is required")
 
-    # Find-or-create the staff user so repeated codes reuse the same person.
-    staff = await db.users.find_one({"name": name, "role": target_role})
-    if staff:
+    # Stable staff identity: reuse an explicitly-chosen staff record, otherwise
+    # ALWAYS create a new one. Never merge by name — two people sharing a name
+    # and role keep separate records and histories.
+    if body.staff_id:
+        staff = await db.users.find_one({"id": body.staff_id, "role": target_role})
+        if not staff:
+            raise HTTPException(status_code=404, detail="Staff member not found")
         staff_id = staff["id"]
+        name = staff["name"]
     else:
+        name = (body.name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Name is required")
         staff_id = new_id()
         await db.users.insert_one(
             {
@@ -231,6 +240,19 @@ async def create_code(body: CreateCode, user: dict = Depends(get_current_user)):
     }
     await db.access_codes.insert_one(doc)
     return clean(doc)
+
+
+@codes_router.get("/staff")
+async def list_staff(user: dict = Depends(get_current_user)):
+    """Existing staff records the supervisor may re-issue a code to."""
+    roles = ISSUABLE.get(user["role"], [])
+    if not roles:
+        return []
+    return (
+        await db.users.find({"role": {"$in": roles}}, {"_id": 0, "id": 1, "name": 1, "role": 1})
+        .sort("name", 1)
+        .to_list(500)
+    )
 
 
 @codes_router.get("")
